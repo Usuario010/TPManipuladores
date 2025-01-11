@@ -1,0 +1,35 @@
+from simulation import *
+import numpy as np
+from simobjects.ball import *
+from simobjects.box import *
+from simobjects.cylinder import *
+from simobjects.pointlight import *
+from simobjects.pointcloud import *
+from utils import *
+from graphics.meshmaterial import *
+import robot as rb
+import sys
+
+def main():
+    # 1) Cria o robô Staubli TX60 (6 DOF)
+    robot = rb.Robot.create_staubli_tx60()
+
+    # 2) Cria um quadro (uma Box fina) para escrever
+    mesh_board = MeshMaterial(roughness=1, metalness=0.9)
+    board = Box(
+        htm=Utils.trn([0.5, 0, 0.5]),  # (x=0.5, y=0, z=0.5)
+        width=0.05,    # espessura no eixo X
+        depth=0.9,     # largura no eixo Y
+        height=0.8,    # altura no eixo Z
+        color="blue",
+        mesh_material=mesh_board
+    )
+
+    # 3) Cria a simulação, adicionando o robô e o quadro
+    sim = Simulation([robot, board])
+
+    # 5) Inicia a simulação
+    sim.run()
+
+if __name__ == "__main__":
+    main()
