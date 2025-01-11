@@ -1,35 +1,99 @@
-from simulation import *
+import uaibot as ub
 import numpy as np
-from simobjects.ball import *
-from simobjects.box import *
-from simobjects.cylinder import *
-from simobjects.pointlight import *
-from simobjects.pointcloud import *
-from utils import *
-from graphics.meshmaterial import *
-import robot as rb
-import sys
 
-def main():
-    # 1) Cria o robô Staubli TX60 (6 DOF)
-    robot = rb.Robot.create_staubli_tx60()
+def WriteNumber():
+    # Create simulation and add objects to the scene
+    robot = ub.Robot.create_staubli_tx60(Utils.trn([0,0,0.3]), "robo")
+    n = len(robot.links)
 
-    # 2) Cria um quadro (uma Box fina) para escrever
     mesh_board = MeshMaterial(roughness=1, metalness=0.9)
-    board = Box(
-        htm=Utils.trn([0.5, 0, 0.5]),  # (x=0.5, y=0, z=0.5)
-        width=0.05,    # espessura no eixo X
-        depth=0.9,     # largura no eixo Y
-        height=0.8,    # altura no eixo Z
-        color="blue",
-        mesh_material=mesh_board
-    )
+    board = Box(htm=Utils.trn([0.5, 0, 0.5]), width=0.05, depth=0.9, height=0.8, color="white",
+                mesh_material=mesh_board)
+    material_box = MeshMaterial(color="#242526", roughness=1, metalness=1)
+    base = Cylinder(htm=Utils.trn([0,0,0]), radius=0.1, height=0.6, mesh_material = material_box)
+    sim = Simulation.create_sim_factory([robot, board, base])
 
-    # 3) Cria a simulação, adicionando o robô e o quadro
-    sim = Simulation([robot, board])
+    # Configurações gerais
+    x_pos = 0.47  # Posição constante no eixo X
+    z_top = 0.4   # Altura do topo
+    z_bottom = 0
+      # Altura da base
+    y_width = 0.2   # Largura da base horizontal
+    N_points = 50   # Número de pontos por segmento
 
-    # 5) Inicia a simulação
+    # Linha vertical (corpo do "1")
+    curve = np.zeros((3, N_points))
+    for i in range(N_points):
+        alpha = i / (N_points - 1)
+        curve[:, i] = [x_pos, 0.0, z_bottom + alpha * (z_top - z_bottom)]
+
+    # Create vector field
+    vf = rb.Robot.vector_field(np.matrix(curve), 10, 0.3)
+
+    # Parameters
+    dt = 0.01
+    time_max = 10
+    K = 0.1
+    imax = round(time_max / dt)
+
+    x_des = np.matrix([0, 0, 1]).reshape((3, 1))
+    y_des = np.matrix([0, -1, 0]).reshape((3, 1))
+    z_des = np.matrix([1, 0, 0]).reshape((3, 1))
+
+    # Main loop
+    draw_points = np.zeros((3, 0))
+    ind_reached = 2
+    reached_board = False
+
+    for i in range(imax):
+
+        jac_eef, htm_eef = robot.jac_geo()
+
+        p_eef = htm_eef[0:3, 3]
+        x_eef = htm_eef[0:3, 0]
+        y_eef = htm_eef[0:3, 1]
+        z_eef = htm_eef[0:3, 2]
+
+
+        target = np.matrix(np.zeros((6,1)))
+        vf_value = vf(p_eef)
+        target[0:3] = vf_value[:,0]
+        target[3] = -K * sqrt(max(1 - x_des.T * x_eef, 0))
+        target[4] = -K * sqrt(max(1 - y_des.T * y_eef, 0))
+        target[5] = -K * sqrt(max(1 - z_des.T * z_eef, 0))
+
+        jac_target = np.matrix(np.zeros((6, n)))
+        jac_target[0:3, :] = jac_eef[0:3, :]
+        jac_target[3, :] = x_des.T * Utils.S(x_eef) * jac_eef[3:6, :]
+        jac_target[4, :] = y_des.T * Utils.S(y_eef) * jac_eef[3:6, :]
+        jac_target[5, :] = z_des.T * Utils.S(z_eef) * jac_eef[3:6, :]
+
+        qdot = Utils.dp_inv(jac_target, 0.002) * target
+
+        q_prox = robot.q + qdot * dt
+
+        robot.add_ani_frame(i * dt, q_prox)
+
+        # See if the end-effector is close to the board to add to the point cloud
+        draw_points = np.block([draw_points, p_eef])
+
+
+        if (not reached_board) and (abs(p_eef[0,0] - board.htm[0,3]) < board.width / 2 + 0.001):
+            reached_board = True
+            ind_reached = i
+
+    # Set up the cloud of points
+    point_cloud = PointCloud(name="drawing", points=draw_points, size=0.025)
+    sim.add(point_cloud)
+    for i in range(imax):
+        if i < ind_reached:
+            point_cloud.add_ani_frame(i * dt, 0, 0)
+        else:
+            point_cloud.add_ani_frame(i * dt, ind_reached, i)
+
+    # Run simulation
     sim.run()
 
-if __name__ == "__main__":
-    main()
+    return sim
+
+WriteNumber()
