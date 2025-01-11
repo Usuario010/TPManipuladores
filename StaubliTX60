@@ -13,20 +13,22 @@ def WriteNumber():
     base = Cylinder(htm=Utils.trn([0,0,0]), radius=0.1, height=0.6, mesh_material = material_box)
     sim = Simulation.create_sim_factory([robot, board, base])
 
-    # Configurações gerais
-    x_pos = 0.47  # Posição constante no eixo X
-    z_top = 0.4   # Altura do topo
-    z_bottom = 0
-      # Altura da base
-    y_width = 0.2   # Largura da base horizontal
-    N_points = 50   # Número de pontos por segmento
-
-    # Linha vertical (corpo do "1")
-    curve = np.zeros((3, N_points))
-    for i in range(N_points):
-        alpha = i / (N_points - 1)
-        curve[:, i] = [x_pos, 0.0, z_bottom + alpha * (z_top - z_bottom)]
-
+    #Tentativa inicial de desenhar o númeral "1"
+################################################################################
+    # Configurações gerais                                                     #
+    x_pos = 0.47  # Posição constante no eixo X                                #
+    z_top = 0.4   # Altura do topo                                             #
+    z_bottom = 0                                                               #
+      # Altura da base                                                         #
+    y_width = 0.2   # Largura da base horizontal                               #
+    N_points = 50   # Número de pontos por segmento                            #
+                                                                               #
+    # Linha vertical (corpo do "1")                                            #
+    curve = np.zeros((3, N_points))                                            #
+    for i in range(N_points):                                                  #
+        alpha = i / (N_points - 1)                                             #
+        curve[:, i] = [x_pos, 0.0, z_bottom + alpha * (z_top - z_bottom)]      #
+################################################################################
     # Create vector field
     vf = rb.Robot.vector_field(np.matrix(curve), 10, 0.3)
 
