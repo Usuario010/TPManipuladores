@@ -1,101 +1,240 @@
-import uaibot as ub
+import uaibot as rb
+from utils import *
+import sys
 import numpy as np
+from math import sqrt
+from numpy import cross
 
-def WriteNumber():
-    # Create simulation and add objects to the scene
-    robot = ub.Robot.create_staubli_tx60(Utils.trn([0,0,0.3]), "robo")
-    n = len(robot.links)
+def draw_5_demo_stops():
 
-    mesh_board = MeshMaterial(roughness=1, metalness=0.9)
-    board = Box(htm=Utils.trn([0.5, 0, 0.5]), width=0.05, depth=0.9, height=0.8, color="white",
-                mesh_material=mesh_board)
-    material_box = MeshMaterial(color="#242526", roughness=1, metalness=1)
-    base = Cylinder(htm=Utils.trn([0,0,0]), radius=0.1, height=0.6, mesh_material = material_box)
+    # ==============================
+    # 1) CENÁRIO E ROBÔ
+    # ==============================
+    robot = rb.Robot.create_staubli_tx60(
+        htm=Utils.trn([0.0, 0, 0.3]),  # base do robô em x=0.0
+        name="robo"
+    )
+
+    # Board em x=0.5, plano (y,z) ~ 0.3 x 0.3
+    board = Box(
+        htm=Utils.trn([0.5, 0, 0.4]),
+        width=0.02,   # espessura no eixo X
+        depth=1,    # tamanho no eixo Y
+        height=1,   # tamanho no eixo Z
+        color="white",
+        mesh_material=MeshMaterial(roughness=1, metalness=0.9)
+    )
+    base = Cylinder(
+        htm=Utils.trn([0.0, 0, 0.15]),
+        radius=0.1,
+        height=0.3,
+        mesh_material=MeshMaterial(color="#242526", roughness=1, metalness=1)
+    )
     sim = Simulation.create_sim_factory([robot, board, base])
 
-    #Tentativa inicial de desenhar o númeral "1"
-################################################################################
-    # Configurações gerais                                                     #
-    x_pos = 0.47  # Posição constante no eixo X                                #
-    z_top = 0.4   # Altura do topo                                             #
-    z_bottom = 0                                                               #
-      # Altura da base                                                         #
-    y_width = 0.2   # Largura da base horizontal                               #
-    N_points = 50   # Número de pontos por segmento                            #
-                                                                               #
-    # Linha vertical (corpo do "1")                                            #
-    curve = np.zeros((3, N_points))                                            #
-    for i in range(N_points):                                                  #
-        alpha = i / (N_points - 1)                                             #
-        curve[:, i] = [x_pos, 0.0, z_bottom + alpha * (z_top - z_bottom)]      #
-################################################################################
-    # Create vector field
-    vf = rb.Robot.vector_field(np.matrix(curve), 10, 0.3)
+    # ==============================
+    # 2) DEFINIÇÃO DOS PONTOS (NUMERAL "5")
+    # ==============================
+    # No plano x=0.49 => 1 cm antes do board em x=0.5
+    #
+    # p0->p1: parte superior (horizontal)
+    # p1->p2: desce do lado direito
+    # p2->p3: barra do meio (horizontal, direita->esquerda)
+    # p3->p4: desce do lado esquerdo
+    # p4->p5: barra inferior (horizontal)
+    #
+    # (y,z) foram escolhidos para dar uma forma de "5".
 
-    # Parameters
+    p0 = np.array([0.49, -0.2, 0.6])  # top-left
+    p1 = np.array([0.49,  0.2, 0.6])  # top-right
+    p2 = np.array([0.49,  0.2, 0.5])  # middle-right
+    p3 = np.array([0.49, -0.2, 0.5])  # middle-left
+    p4 = np.array([0.49, -0.2, 0.4])  # bottom-left
+    p5 = np.array([0.49,  0.2, 0.4])  # bottom-right
+
+    # ==============================
+    # 3) DEFINIÇÃO DOS TEMPOS
+    # ==============================
+    # Teremos 6 pontos (p0..p5) => 5 segmentos.
+    # Cada segmento levará Tseg=3 s.
+    # E vamos parar 2 s em CADA ponto (p0..p5) => 6 paradas.
+    # Assim, tempo total = (5*3) + (6*2) = 15 + 12 = 27 s.
+
+    Tseg = 3.0  # tempo de cada segmento
+    Stop = 2.0  # parada em cada ponto
+    # total
+    T_total = 5 * Tseg + 6 * Stop  # 15 + 12 = 27
+
+    # ==============================
+    # 4) CRIA LISTAS DE PONTOS E INTERVALOS
+    # ==============================
+    # Em vez de fazer um piecewise gigante manual,
+    # definimos uma sequência: [Stop no p0], [p0->p1], [Stop p1], [p1->p2], ...
+    # e calculamos intervalos cumulativos.
+
+    # Lista de pontos
+    points = [p0, p1, p2, p3, p4, p5]
+    # Teremos 5 segmentos: p0->p1, p1->p2, ..., p4->p5
+
+    # Cada ponto tem "Stop" segundos parado antes de começar o segmento
+    # exceto o último, que paramos no final se quisermos (aqui sim).
+    # Então: Stop em p0, Tseg p0->p1, Stop em p1, Tseg p1->p2, ... Stop p5
+
+    # Montaremos uma tabela de intervalos no tempo
+    # ex: t=0..Stop => p0, depois Stop..Stop+Tseg => p0->p1, etc.
+
+    # Haverá 11 intervalos no total (6 paradas + 5 segmentos).
+    # Indice: 0=Stop p0, 1=Segmento p0->p1, 2=Stop p1, 3=Segmento p1->p2, etc.
+
+    # Cria um "mapa" de intervalos
+    intervals = []  # cada item => (t_start, t_end, tipo, indice_segmento)
+    # tipo "stop" => fica parado no ponto index
+    # tipo "move" => move points[index] -> points[index+1]
+
+    current_t = 0.0
+    # Stop0
+    intervals.append((current_t, current_t + Stop, "stop", 0))
+    current_t += Stop
+
+    # Segmento 1 (p0->p1)
+    intervals.append((current_t, current_t + Tseg, "move", 0))
+    current_t += Tseg
+
+    # Stop1 (no p1)
+    intervals.append((current_t, current_t + Stop, "stop", 1))
+    current_t += Stop
+
+    # Segmento 2 (p1->p2)
+    intervals.append((current_t, current_t + Tseg, "move", 1))
+    current_t += Tseg
+
+    # Stop2 (p2)
+    intervals.append((current_t, current_t + Stop, "stop", 2))
+    current_t += Stop
+
+    # Segmento 3 (p2->p3)
+    intervals.append((current_t, current_t + Tseg, "move", 2))
+    current_t += Tseg
+
+    # Stop3 (p3)
+    intervals.append((current_t, current_t + Stop, "stop", 3))
+    current_t += Stop
+
+    # Segmento 4 (p3->p4)
+    intervals.append((current_t, current_t + Tseg, "move", 3))
+    current_t += Tseg
+
+    # Stop4 (p4)
+    intervals.append((current_t, current_t + Stop, "stop", 4))
+    current_t += Stop
+
+    # Segmento 5 (p4->p5)
+    intervals.append((current_t, current_t + Tseg, "move", 4))
+    current_t += Tseg
+
+    # Stop5 (p5)
+    intervals.append((current_t, current_t + Stop, "stop", 5))
+    current_t += Stop
+
+    # confere se current_t= T_total= 27.0
+    # print(intervals, current_t)
+
+    # ==============================
+    # 5) FUNÇÃO POSIÇÃO DESEJADA (com paradas)
+    # ==============================
+    def pos_desejada(t):
+        if t < 0:
+            return p0
+        if t >= T_total:
+            return p5
+
+        # descobre em qual intervalo "t" se encontra
+        for (t_start, t_end, tip, idx) in intervals:
+            if t_start <= t < t_end:
+                # "stop" => fica no points[idx]
+                if tip=="stop":
+                    return points[idx]
+                else:
+                    # "move" => interpolar points[idx] -> points[idx+1]
+                    alpha = (t - t_start)/(t_end - t_start)
+                    pA = points[idx]
+                    pB = points[idx+1]
+                    return (1-alpha)*pA + alpha*pB
+        # fallback
+        return p5
+
+    # ==============================
+    # 6) CONFIGURAÇÃO DE SIM
+    # ==============================
     dt = 0.01
-    time_max = 10
-    K = 0.1
-    imax = round(time_max / dt)
+    time_max = 30.0  # um pouco acima de 27
+    imax = int(time_max / dt)
 
-    x_des = np.matrix([0, 0, 1]).reshape((3, 1))
-    y_des = np.matrix([0, -1, 0]).reshape((3, 1))
-    z_des = np.matrix([1, 0, 0]).reshape((3, 1))
+    # Controle
+    z_des = np.array([1,0,0], dtype=float)
+    Kp_lin = 1.0
+    Kp_ori = 1.0
+    damping = 0.01
 
-    # Main loop
+    # ==============================
+    # 7) LOOP DE CONTROLE
+    # ==============================
     draw_points = np.zeros((3, 0))
-    ind_reached = 2
-    reached_board = False
+    q_current = robot.q
 
-    for i in range(imax):
+    board_threshold = 0.49
+    start_drawing = False
 
-        jac_eef, htm_eef = robot.jac_geo()
+    for k in range(imax):
+        if k%50==0 or k==(imax-1):
+            perc=100*k/(imax-1)
+            sys.stdout.write(f"\rSimulando: {perc:.1f}%")
+            sys.stdout.flush()
 
-        p_eef = htm_eef[0:3, 3]
-        x_eef = htm_eef[0:3, 0]
-        y_eef = htm_eef[0:3, 1]
-        z_eef = htm_eef[0:3, 2]
+        t = k*dt
 
+        pd = pos_desejada(t).reshape((3,1))
 
-        target = np.matrix(np.zeros((6,1)))
-        vf_value = vf(p_eef)
-        target[0:3] = vf_value[:,0]
-        target[3] = -K * sqrt(max(1 - x_des.T * x_eef, 0))
-        target[4] = -K * sqrt(max(1 - y_des.T * y_eef, 0))
-        target[5] = -K * sqrt(max(1 - z_des.T * z_eef, 0))
+        jac_geo, htm_eef = robot.jac_geo(q_current)
+        p_eef = htm_eef[0:3,3].A1
+        z_eef = htm_eef[0:3,2].A1
 
-        jac_target = np.matrix(np.zeros((6, n)))
-        jac_target[0:3, :] = jac_eef[0:3, :]
-        jac_target[3, :] = x_des.T * Utils.S(x_eef) * jac_eef[3:6, :]
-        jac_target[4, :] = y_des.T * Utils.S(y_eef) * jac_eef[3:6, :]
-        jac_target[5, :] = z_des.T * Utils.S(z_eef) * jac_eef[3:6, :]
+        err_p = pd.flatten() - p_eef
+        vel_lin = Kp_lin*err_p
+        w = Kp_ori * cross(z_eef, z_des)
+        target = np.hstack((vel_lin, w)).reshape((6,1))
 
-        qdot = Utils.dp_inv(jac_target, 0.002) * target
+        # Jacobiano
+        J_v = jac_geo[0:3,:]
+        J_w = jac_geo[3:6,:]
+        jac_target = np.vstack((J_v, J_w))
 
-        q_prox = robot.q + qdot * dt
+        qdot = Utils.dp_inv(jac_target, damping)*target
+        q_prox = q_current + qdot*dt
 
-        robot.add_ani_frame(i * dt, q_prox)
+        robot.add_ani_frame(t, q_prox)
+        q_current = q_prox
 
-        # See if the end-effector is close to the board to add to the point cloud
-        draw_points = np.block([draw_points, p_eef])
+        if (not start_drawing) and (p_eef[0] >= board_threshold - 1e-2):
+            start_drawing = True
 
+        if start_drawing:
+            draw_points = np.block([draw_points, p_eef.reshape((3,1))])
 
-        if (not reached_board) and (abs(p_eef[0,0] - board.htm[0,3]) < board.width / 2 + 0.001):
-            reached_board = True
-            ind_reached = i
+    print("\nSimulação concluída.")
+    print("draw_points.shape =", draw_points.shape)
 
-    # Set up the cloud of points
-    point_cloud = PointCloud(name="drawing", points=draw_points, size=0.025)
-    sim.add(point_cloud)
-    for i in range(imax):
-        if i < ind_reached:
-            point_cloud.add_ani_frame(i * dt, 0, 0)
-        else:
-            point_cloud.add_ani_frame(i * dt, ind_reached, i)
+    # ==============================
+    # 8) POINT CLOUD
+    # ==============================
+    pc = PointCloud(name="drawing_5", points=draw_points, size=0.02, color="blue")
+    sim.add(pc)
 
-    # Run simulation
+    for k in range(imax):
+        t = k*dt
+        pc.add_ani_frame(t, 0, draw_points.shape[1])
+
     sim.run()
 
-    return sim
-
-WriteNumber()
+if __name__=="__main__":
+    draw_5_demo_stops()
